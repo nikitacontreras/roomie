@@ -1,4 +1,5 @@
-exports.regions = {
+/* Auto-generated from original JS */
+export const regions = {
     nds: {
         "A": "asia",
         "C": "china",
@@ -8,7 +9,6 @@ exports.regions = {
         "F": "french",
         "H": "dutch",
         "I": "italian",
-        "J": "japanese",
         "K": "korean",
         "L": "usa#2",
         "M": "swedish",
@@ -44,4 +44,5 @@ exports.regions = {
         1: "americas",
         2: "europe"
     }
-}
+} as const;
+export type SupportedSystemsForRegions = keyof typeof regions;

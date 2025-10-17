@@ -1,4 +1,5 @@
-exports.specs = {
+/* Auto-generated from original JS */
+export const specs = {
     nds:{
         unitcode:{
             "0":"nds",
@@ -13,7 +14,6 @@ exports.specs = {
         hardware: {
             "0": { coprocessor: false, rom: true },
             "1": { coprocessor: false, rom: true, ram: true },
-            "2": { coprocessor: false, rom: true, ram: true, battery: true },
             "2": { coprocessor: false, rom: true, ram: true, battery: true },
             "3": { coprocessor: "dsp", rom: true },
             "4": { coprocessor: "dsp", rom: true, ram: true },
@@ -58,4 +58,5 @@ exports.specs = {
             "32": { type: "ExHiROM", speed: "3.58MHz" },
         }
     }
-}
+} as const;
+export type SupportedSystemsForSpecs = keyof typeof specs;
