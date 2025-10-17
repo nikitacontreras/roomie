@@ -1,5 +1,9 @@
 # roomie
 
+![GitHub Sponsors](https://img.shields.io/github/sponsors/nikitacontreras?style=flat-square&label=sponsor%20me&link=https%3A%2F%2Fgithub.com%2Fsponsors%2Fnikitacontreras) ![NPM Version](https://img.shields.io/npm/v/roomie?style=flat-square)
+
+
+
 Roomie is a library for analyzing basic metadata of ROM files from various classic consoles. It allows extracting relevant information such as the game name, region, code, ROM and RAM size, version, and other console-specific data.
 
 ## Installation
