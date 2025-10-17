@@ -121,10 +121,58 @@ export class Roomie extends EventEmitter {
     return out;
   }
 
-  async load(path: string): Promise<void> {
-    this._path = path;
-    this._rom = await fs.readFile(path);
-    this._system = this.detectSystemFromPath(path);
+  async load(pathOrBuffer: string | Buffer): Promise<void> {
+    if (typeof pathOrBuffer === "string") {
+      this._path = pathOrBuffer;
+      this._rom = await fs.readFile(pathOrBuffer);
+      this._system = this.detectSystemFromPath(pathOrBuffer);
+      if (!this._system) {
+        throw new Error("unknown_file");
+      }
+    } else {
+      this._rom = pathOrBuffer;
+      this._path = "in-memory";
+
+      const b = this._rom;
+      let detected: SupportedSystem | undefined = undefined;
+
+      // Check NDS: game code at 0x0C-0x10 ASCII uppercase letters/digits
+      if (b.length >= 0x10) {
+        const code = b.subarray(0x0C, 0x10).toString("ascii");
+        if (/^[A-Z0-9]{4}$/.test(code)) {
+          detected = "nds";
+        }
+      }
+
+      // Check GBA: game code at 0xAC-0xB0 ASCII uppercase letters/digits
+      if (!detected && b.length >= 0xB0) {
+        const code = b.subarray(0xAC, 0xB0).toString("ascii");
+        if (/^[A-Z0-9]{4}$/.test(code)) {
+          detected = "gba";
+        }
+      }
+
+      // Check GB: game code at 0x0134-0x0143 ASCII valid characters
+      if (!detected && b.length >= 0x0143) {
+        const code = b.subarray(0x0134, 0x0143).toString("ascii");
+        if (/^[A-Z0-9]{4,9}$/.test(code)) {
+          detected = "gb";
+        }
+      }
+
+      // Check SFC: use isHiRomBuffer heuristic
+      if (!detected) {
+        if (b.length > 0x8000 && (isHiRomBuffer(b) || !isHiRomBuffer(b))) {
+          detected = "sfc";
+        }
+      }
+
+      if (!detected) {
+        throw new Error("unknown_bytes");
+      }
+
+      this._system = detected;
+    }
     const sha1 = createHash("sha1").update(this._rom).digest("hex");
     const gameCode = this.readGameCode(this._system);
     const info: RomInfo = {
