@@ -1,6 +1,6 @@
 {
   "name": "roomie",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "ROM metadata helper",
   "license": "MIT",
   "type": "module",
