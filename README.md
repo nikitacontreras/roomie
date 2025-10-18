@@ -14,6 +14,23 @@ npm install roomie
 
 ## Usage
 
+Roomie supports both CommonJS and ES Module import styles depending on your project setup.
+
+### CommonJS (CJS)
+
+```js
+const { Roomie } = require('roomie');
+
+const romPath = "/path/to/game.sfc";
+const roomie = new Roomie(romPath);
+
+roomie.on("loaded", (info) => {
+  console.log("ROM Information:", info);
+});
+```
+
+### ES Modules (ESM)
+
 ```ts
 import Roomie from "roomie";
 

@@ -1,4 +1,3 @@
-// Naive dual-build: copy ESM to MJS and generate CJS shim.
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +11,11 @@ async function run() {
     const code = await fs.readFile(esmIndex, "utf8");
     await fs.writeFile(join(dist, "index.mjs"), code, "utf8");
     // CJS proxy
-    const cjs = 'module.exports = require("./index.mjs");\n';
+    const cjs = `
+const mod = require("./index.mjs");
+module.exports = mod.default || mod;
+module.exports.default = mod.default || mod;
+`;
     await fs.writeFile(join(dist, "index.cjs"), cjs, "utf8");
     console.log("Dual build emitted.");
   } catch (e) {
