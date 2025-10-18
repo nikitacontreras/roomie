@@ -67,6 +67,7 @@ console.log(roomie.info);
 | **Game Boy Advance (GBA)**   | Provides title, game code, region, ROM/RAM size, version, and related info.       |
 | **Game Boy (GB)**            | Retrieves title, cartridge type, ROM/RAM size, and additional metadata.          |
 | **Super Nintendo / Super Famicom (SNES/SFC)** | Detects ROM type (HiROM/LoROM), game name, region, code, ROM size, and console-specific fields. |
+| **Nintendo 64 (N64)**        | Extracts the game title (byte-swapped), ROM hash, and region information.         |
 
 ---
 
@@ -92,7 +93,7 @@ Loads or reloads a ROM from a file path or Buffer, emitting `'loaded'` on succes
 
 - `roomie.info: RomInfo` – Object containing extracted ROM metadata.
 - `roomie.rom: Buffer` – Raw bytes of the loaded ROM.
-- `roomie.system: "nds" | "gba" | "gb" | "sfc"` – Detected console system.
+- `roomie.system: "nds" | "gba" | "gb" | "sfc" | "n64"` – Detected console system.
 
 ### Events
 
