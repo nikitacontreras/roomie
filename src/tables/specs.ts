@@ -1,14 +1,14 @@
 /* Auto-generated from original JS */
 export const specs = {
-    nds:{
-        unitcode:{
-            "0":"nds",
+    nds: {
+        unitcode: {
+            "0": "nds",
             "1": "nds/dsi",
             "2": "dsi"
         }
     },
-    gb:{
-        "a":""
+    gb: {
+        "a": ""
     },
     sfc: {
         hardware: {
@@ -51,12 +51,63 @@ export const specs = {
         romspeed: {
             "20": { type: "LoROM", speed: "2.68MHz" },
             "21": { type: "HiROM", speed: "2.68MHz" },
-            "23": { type: "SA-1"},
+            "23": { type: "SA-1" },
             "25": { type: "ExHiROM", speed: "2.68MHz" },
             "30": { type: "LoROM", speed: "3.58MHz" },
             "31": { type: "HiROM", speed: "3.58MHz" },
             "32": { type: "ExHiROM", speed: "3.58MHz" },
         }
+    },
+    nes: {
+        mappers: {
+            "0": "NROM",
+            "1": "MMC1",
+            "2": "UxROM",
+            "3": "CNROM",
+            "4": "MMC3",
+            "5": "MMC5",
+            "7": "AxROM",
+            "9": "MMC2",
+            "10": "MMC4",
+            "11": "Color Dreams",
+            "13": "CPROM",
+            "15": "100-in-1 Contra Function 16",
+            "16": "Bandai FCG-1/2 / LZ93D50",
+            "18": "Jaleco SS88006",
+            "19": "Namco 163",
+            "21": "VRC4a/4c",
+            "22": "VRC2a",
+        }
+    },
+    gb_mbc: {
+        "00": "ROM ONLY",
+        "01": "MBC1",
+        "02": "MBC1+RAM",
+        "03": "MBC1+RAM+BATTERY",
+        "05": "MBC2",
+        "06": "MBC2+BATTERY",
+        "08": "ROM+RAM",
+        "09": "ROM+RAM+BATTERY",
+        "0b": "MMM01",
+        "0c": "MMM01+RAM",
+        "0d": "MMM01+RAM+BATTERY",
+        "0f": "MBC3+TIMER+BATTERY",
+        "10": "MBC3+TIMER+RAM+BATTERY",
+        "11": "MBC3",
+        "12": "MBC3+RAM",
+        "13": "MBC3+RAM+BATTERY",
+        "19": "MBC5",
+        "1a": "MBC5+RAM",
+        "1b": "MBC5+RAM+BATTERY",
+        "1c": "MBC5+RUMBLE",
+        "1d": "MBC5+RUMBLE+RAM",
+        "1e": "MBC5+RUMBLE+RAM+BATTERY",
+        "20": "MBC6",
+        "22": "MBC7+SENSOR+RUMBLE+RAM+BATTERY",
+        "fc": "POCKET CAMERA",
+        "fd": "BANDAI TAMA5",
+        "fe": "HuC3",
+        "ff": "HuC1+RAM+BATTERY"
     }
 } as const;
 export type SupportedSystemsForSpecs = keyof typeof specs;

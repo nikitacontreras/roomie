@@ -1,1 +1,1 @@
-export type SupportedSystem = "nds" | "gba" | "gb" | "sfc" | "n64";
+export type SupportedSystem = "nds" | "gba" | "gb" | "sfc" | "n64" | "nes" | "genesis" | "sms" | "gg" | "pce" | "ws" | "wsc";

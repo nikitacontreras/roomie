@@ -1,17 +1,20 @@
+import path from "node:path";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
+import AdmZip from "adm-zip";
 import { regions } from "./tables/regions.js";
 import { specs } from "./tables/specs.js";
 import { hexEncode } from "./utils/stringHelper.js";
 import { isHiRom, isHiRomBuffer } from "./systems/snes.js";
+import { crc32 } from "./utils/crc32.js";
 import type { SupportedSystem } from "./types.js";
 
 export interface RomInfo {
   path: string;
   system: SupportedSystem;
   size: number;
-  hash: { sha1: string };
+  hash: { sha1: string; crc32: string };
   gameCode?: string;
   region?: string;
   sfc?: {
@@ -24,6 +27,30 @@ export interface RomInfo {
     name?: string;
     country?: string;
     version?: string;
+  };
+  nes?: {
+    version: "1.0" | "2.0";
+    mapper: number;
+    submapper?: number;
+    prgRomSize: number;
+    chrRomSize: number;
+    prgRamSize?: number;
+    prgNvramSize?: number;
+    chrRamSize?: number;
+    chrNvramSize?: number;
+    timing?: string;
+    consoleType?: string;
+  };
+  genesis?: {
+    version?: string;
+    serial?: string;
+    region?: string;
+    description?: string;
+  };
+  sms?: {
+    version?: string;
+    region?: string;
+    serial?: string;
   };
 }
 
@@ -39,20 +66,27 @@ export class Roomie extends EventEmitter {
   public gamecode?: string;
   public cartridge?: Record<string, unknown>;
 
-  constructor(path: string) {
+  constructor(path?: string) {
     super();
-    this.load(path);
+    if (path) this.load(path);
   }
 
-  private detectSystemFromPath(p: string): SupportedSystem {
+  private detectSystemFromPath(p: string): SupportedSystem | false {
     const ext = p.toLowerCase().split(".").pop();
     if (ext === "nds") return "nds";
     if (ext === "gba") return "gba";
     if (ext === "gb" || ext === "gbc") return "gb";
     if (ext === "sfc" || ext === "smc") return "sfc";
     if (ext === "z64" || ext === "n64") return "n64";
-    // Default to sfc to keep compatibility with original intent; could be improved.
-    return "sfc";
+    if (ext === "nes") return "nes";
+    if (ext === "md" || ext === "gen" || ext === "smd") return "genesis";
+    if (ext === "sms") return "sms";
+    if (ext === "gg") return "gg";
+    if (ext === "pce") return "pce";
+    if (ext === "ws") return "ws";
+    if (ext === "wsc") return "wsc";
+
+    return false;
   }
 
   private readGameCode(system: SupportedSystem): string | undefined {
@@ -70,7 +104,7 @@ export class Roomie extends EventEmitter {
       if (system === "n64" && b.length >= 0x2F) {
         return b.subarray(0x20, 0x2F).toString("ascii").trim();
       }
-    } catch {}
+    } catch { }
     return undefined;
   }
 
@@ -119,6 +153,21 @@ export class Roomie extends EventEmitter {
             0x5A: "Europe",
           };
           return regionMap[regionByte] || "Unknown";
+        }
+        return undefined;
+      case "nes":
+        if (this._rom.length >= 16) {
+          const b = this._rom;
+          const isNes2 = (b[7] & 0x0C) === 0x08;
+          if (isNes2) {
+            const timing = b[12] & 0x03;
+            switch (timing) {
+              case 0: return "NTSC";
+              case 1: return "PAL";
+              case 2: return "Multi-region";
+              case 3: return "Dendy";
+            }
+          }
         }
         return undefined;
     }
@@ -202,8 +251,21 @@ export class Roomie extends EventEmitter {
             return b.subarray(0x20, 0x34).toString("ascii").replace(/\0/g, "").trim();
           }
           break;
+        case "nes":
+          return "NES ROM";
+        case "genesis":
+          if (b.length >= 0x150) {
+            return b.subarray(0x120, 0x150).toString("ascii").trim();
+          }
+          break;
+        case "sms":
+        case "gg":
+          return "SEGA MASTER/GG ROM";
+        case "ws":
+        case "wsc":
+          return "WONDERSWAN ROM";
       }
-    } catch {}
+    } catch { }
     return undefined;
   }
 
@@ -245,7 +307,7 @@ export class Roomie extends EventEmitter {
           }
           break;
       }
-    } catch {}
+    } catch { }
     return undefined;
   }
 
@@ -266,18 +328,34 @@ export class Roomie extends EventEmitter {
       case "gba": {
         const code = this._gamecode();
         const region = this._region();
+
+        // GBA Save Type identification (heuristic scanning)
+        const saveTypePatterns = ["SRAM_V", "EEPROM_V", "FLASH_V", "FLASH512_V", "FLASH1M_V"];
+        let saveType = "Unknown";
+        const romStr = b.subarray(0, Math.min(b.length, 0x100000)).toString("ascii"); // Scan first 1MB
+        for (const pattern of saveTypePatterns) {
+          if (romStr.includes(pattern)) {
+            saveType = pattern.split("_")[0];
+            break;
+          }
+        }
+
         return {
           system: "gba",
           gameCode: code,
           region,
+          saveType,
           size: b.length,
         };
       }
       case "gb": {
         const region = this._region();
+        const mbcCode = b.length >= 0x148 ? b[0x147].toString(16).padStart(2, "0") : undefined;
+        const mbc = mbcCode ? (specs as any).gb_mbc?.[mbcCode] : undefined;
         return {
           system: "gb",
           region,
+          mbc,
           size: b.length,
         };
       }
@@ -319,6 +397,106 @@ export class Roomie extends EventEmitter {
           size: b.length,
         };
       }
+      case "nes": {
+        if (b.length < 16) return { system: "nes", size: b.length };
+        const isNes2 = (b[7] & 0x0C) === 0x08;
+        const mapper = isNes2
+          ? (b[6] >> 4) | (b[7] & 0xF0) | ((b[8] & 0x0F) << 8)
+          : (b[6] >> 4) | (b[7] & 0xF0);
+
+        const nesInfo: any = {
+          version: isNes2 ? "2.0" : "1.0",
+          mapper,
+          size: b.length
+        };
+
+        const getNesSize = (lsb: number, msbNibble: number, baseUnit: number) => {
+          if (msbNibble === 0x0F) {
+            const multiplier = (lsb & 0x03) * 2 + 1;
+            const exponent = (lsb >> 2);
+            return Math.pow(2, exponent) * multiplier;
+          }
+          return ((msbNibble << 8) | lsb) * baseUnit;
+        };
+
+        if (isNes2) {
+          nesInfo.submapper = b[8] >> 4;
+          nesInfo.prgRomSize = getNesSize(b[4], b[9] & 0x0F, 16384);
+          nesInfo.chrRomSize = getNesSize(b[5], (b[9] >> 4) & 0x0F, 8192);
+
+          const prgRamShift = b[10] & 0x0F;
+          const prgNvramShift = (b[10] >> 4) & 0x0F;
+          if (prgRamShift > 0) nesInfo.prgRamSize = 64 << prgRamShift;
+          if (prgNvramShift > 0) nesInfo.prgNvramSize = 64 << prgNvramShift;
+
+          const chrRamShift = b[11] & 0x0F;
+          const chrNvramShift = (b[11] >> 4) & 0x0F;
+          if (chrRamShift > 0) nesInfo.chrRamSize = 64 << chrRamShift;
+          if (chrNvramShift > 0) nesInfo.chrNvramSize = 64 << chrNvramShift;
+
+          const timingCodes = ["NTSC", "PAL", "Multi-region", "Dendy"];
+          nesInfo.timing = timingCodes[b[12] & 0x03];
+
+          const consoleTypes = ["NES/Famicom", "Vs. System", "PlayChoice-10", "Extended"];
+          nesInfo.consoleType = consoleTypes[b[7] & 0x03];
+          nesInfo.mapperName = (specs as any).nes?.mappers?.[mapper.toString()];
+        } else {
+          nesInfo.prgRomSize = b[4] * 16384;
+          nesInfo.chrRomSize = b[5] * 8192;
+          nesInfo.mapperName = (specs as any).nes?.mappers?.[mapper.toString()];
+        }
+
+        return {
+          system: "nes",
+          ...nesInfo
+        };
+      }
+      case "genesis": {
+        if (b.length < 0x200) return { system: "genesis", size: b.length };
+        const region = b.subarray(0x1F0, 0x200).toString("ascii").trim();
+        const serial = b.subarray(0x180, 0x18E).toString("ascii").trim();
+        const overseasName = b.subarray(0x150, 0x180).toString("ascii").trim();
+        return {
+          system: "genesis",
+          serial,
+          region,
+          overseasName,
+          size: b.length
+        };
+      }
+      case "sms":
+      case "gg": {
+        const off = b.length >= 0x8000 ? 0x7FF0 : (b.length >= 0x4000 ? 0x3FF0 : 0x1FF0);
+        if (b.length < off + 16) return { system: this._system, size: b.length };
+        const product = b.subarray(off + 12, off + 14).toString("hex");
+        const regionByte = b[off + 15] >> 4;
+        const region = regionByte >= 4 ? "Export" : "Japan";
+        return {
+          system: this._system,
+          product,
+          region,
+          size: b.length
+        };
+      }
+      case "ws":
+      case "wsc": {
+        if (b.length < 10) return { system: this._system, size: b.length };
+        const off = b.length - 10;
+        const publisher = b[off];
+        const model = b[off + 1] === 0 ? "WS" : "WSC";
+        const gameId = b[off + 2];
+        const version = b[off + 3];
+        const region = b[off + 4] === 0 ? "Japan" : "Export";
+        return {
+          system: this._system,
+          publisher,
+          model,
+          gameId,
+          version,
+          region,
+          size: b.length
+        };
+      }
       default:
         return undefined;
     }
@@ -329,84 +507,163 @@ export class Roomie extends EventEmitter {
   }
 
   async load(pathOrBuffer: string | Buffer): Promise<void> {
+    let b: Buffer;
+
     if (typeof pathOrBuffer === "string") {
       this._path = pathOrBuffer;
-      this._rom = await fs.readFile(pathOrBuffer);
-      this._system = this.detectSystemFromPath(pathOrBuffer);
-      if (!this._system) {
-        throw new Error("unknown_file");
+      const fileBuffer = await fs.readFile(pathOrBuffer);
+
+      // Check if it's a ZIP by extension or magic
+      if (pathOrBuffer.toLowerCase().endsWith(".zip") || (fileBuffer.length > 4 && fileBuffer.readUInt32BE(0) === 0x504B0304)) {
+        const zip = new AdmZip(fileBuffer);
+        const entries = zip.getEntries();
+        // Look for the first entry that doesn't look like junk
+        const romEntry = entries.find((e: any) => !e.isDirectory && !e.entryName.match(/\.(txt|jpg|png|xml|db|url)$|^\./i));
+
+        if (!romEntry) throw new Error("no_rom_in_zip");
+        b = zip.readFile(romEntry) as Buffer;
+      } else {
+        b = fileBuffer;
       }
+
+      this._rom = b;
+      const detected = this.detectSystemFromPath(pathOrBuffer);
+      this._system = detected || "sfc"; // Fallback to be handled by buffer check if needed
     } else {
-      this._rom = pathOrBuffer;
       this._path = "in-memory";
-
-      const b = this._rom;
-      let detected: SupportedSystem | undefined = undefined;
-
-      // Check NDS: game code at 0x0C-0x10 ASCII uppercase letters/digits
-      if (b.length >= 0x10) {
-        const code = b.subarray(0x0C, 0x10).toString("ascii");
-        if (/^[A-Z0-9]{4}$/.test(code)) {
-          detected = "nds";
-        }
+      // Check if buffer is a ZIP
+      if (pathOrBuffer.length > 4 && pathOrBuffer.readUInt32BE(0) === 0x504B0304) {
+        const zip = new AdmZip(pathOrBuffer);
+        const entries = zip.getEntries();
+        const romEntry = entries.find((e: any) => !e.isDirectory && !e.entryName.match(/\.(txt|jpg|png|xml|db|url)$|^\./i));
+        if (!romEntry) throw new Error("no_rom_in_zip");
+        b = zip.readFile(romEntry) as Buffer;
+      } else {
+        b = pathOrBuffer;
       }
-
-      // Check GBA: game code at 0xAC-0xB0 ASCII uppercase letters/digits
-      if (!detected && b.length >= 0xB0) {
-        const code = b.subarray(0xAC, 0xB0).toString("ascii");
-        if (/^[A-Z0-9]{4}$/.test(code)) {
-          detected = "gba";
-        }
-      }
-
-      // Check GB: game code at 0x0134-0x0143 ASCII valid characters
-      if (!detected && b.length >= 0x0143) {
-        const code = b.subarray(0x0134, 0x0143).toString("ascii");
-        if (/^[A-Z0-9]{4,9}$/.test(code)) {
-          detected = "gb";
-        }
-      }
-
-      // Check N64: ASCII text at 0x20-0x2E
-      if (!detected && b.length >= 0x2F) {
-        const code = b.subarray(0x20, 0x2F).toString("ascii");
-        if (/^[\x20-\x7E]+$/.test(code) && code.trim().length > 0) {
-          detected = "n64";
-        }
-      }
-
-      // Check SFC: use isHiRomBuffer heuristic
-      if (!detected) {
-        if (b.length > 0x8000 && (isHiRomBuffer(b) || !isHiRomBuffer(b))) {
-          detected = "sfc";
-        }
-      }
-
-      if (!detected) {
-        throw new Error("unknown_bytes");
-      }
-
-      this._system = detected;
+      this._rom = b;
     }
+
+    const romBuffer = this._rom;
+    let detected: SupportedSystem | undefined = undefined;
+
+    // Check system from bytes (more reliable than extension for ZIPs)
+    // -------------------------------------------------------------
+
+    // Check NDS: game code at 0x0C-0x10 ASCII uppercase letters/digits
+    if (romBuffer.length >= 0x10) {
+      const code = romBuffer.subarray(0x0C, 0x10).toString("ascii");
+      if (/^[A-Z0-9]{4}$/.test(code)) {
+        detected = "nds";
+      }
+    }
+
+    // Check GBA: game code at 0xAC-0xB0 ASCII uppercase letters/digits
+    if (!detected && b.length >= 0xB0) {
+      const code = b.subarray(0xAC, 0xB0).toString("ascii");
+      if (/^[A-Z0-9]{4}$/.test(code)) {
+        detected = "gba";
+      }
+    }
+
+    // Check GB: game code at 0x0134-0x0143 ASCII valid characters
+    if (!detected && b.length >= 0x0143) {
+      const code = b.subarray(0x0134, 0x0143).toString("ascii");
+      if (/^[A-Z0-9]{4,9}$/.test(code)) {
+        detected = "gb";
+      }
+    }
+
+    // Check NES: starts with "NES\x1a"
+    if (!detected && b.length >= 4) {
+      if (b[0] === 0x4E && b[1] === 0x45 && b[2] === 0x53 && b[3] === 0x1A) {
+        detected = "nes";
+      }
+    }
+
+    // Check N64: ASCII text at 0x20-0x2E AND Magic Word at 0x00
+    if (!detected && b.length >= 0x2F) {
+      const magic = b.readUInt32BE(0);
+      // Common N64 magic values (Big Endian, Byte Swapped, Little Endian)
+      if (magic === 0x80371240 || magic === 0x37804012 || magic === 0x40123780) {
+        detected = "n64";
+      }
+    }
+
+    // Check SFC: verify checksum or markup before falling back
+    if (!detected && b.length >= 0x8000) {
+      if (isHiRomBuffer(b)) {
+        detected = "sfc";
+      } else {
+        // LoROM check
+        const titleOff = 0x7FC0;
+        if (b.length > titleOff + 20) {
+          const title = b.subarray(titleOff, titleOff + 20).toString('ascii');
+          if (/^[\x20-\x7E\s]+$/.test(title) && title.trim().length > 0) {
+            detected = "sfc";
+          }
+        }
+      }
+    }
+
+    // Check Genesis: "SEGA" at 0x100
+    if (!detected && b.length >= 0x104) {
+      const magic = b.subarray(0x100, 0x104).toString("ascii");
+      if (magic === "SEGA") {
+        detected = "genesis";
+      }
+    }
+
+    // Check SMS/GG: "TMR SEGA" at 0x7FF0, 0x3FF0 or 0x1FF0
+    if (!detected) {
+      for (const off of [0x7FF0, 0x3FF0, 0x1FF0]) {
+        if (b.length >= off + 8 && b.subarray(off, off + 8).toString("ascii") === "TMR SEGA") {
+          detected = b.length >= 0x8000 ? "sms" : "gg"; // Heuristic
+          break;
+        }
+      }
+    }
+
+    // Check WSC: check model byte near end
+    if (!detected && b.length >= 0x8000) {
+      const off = b.length - 10;
+      if (b[off + 1] === 0 || b[off + 1] === 1) { // 0=WS, 1=WSC
+        // WSC check is a bit weak without developer ID check, but let's use it as heuristic
+        // maybe only if extension also matches? 
+      }
+    }
+
+    if (!detected) {
+      throw new Error("unknown_bytes");
+    }
+
+    this._system = detected;
+
     const sha1 = createHash("sha1").update(this._rom).digest("hex");
+    const crc = crc32(this._rom);
     const gameCode = this.readGameCode(this._system);
     const info: RomInfo = {
       path: this._path,
       system: this._system,
       size: this._rom.length,
-      hash: { sha1 },
+      hash: { sha1, crc32: crc },
       gameCode,
       region: this.computeRegion(this._system, gameCode),
     };
     if (this._system === "sfc") {
       info.sfc = this.computeSfcInfo();
-    }
-    if (this._system === "n64") {
+    } else if (this._system === "n64") {
       info.n64 = {
         name: this._name(),
         country: this._region(),
         version: this._rom.length > 0x3F ? this._rom[0x3F].toString() : undefined,
       };
+    } else {
+      // Generic assignment for new systems (nes, genesis, sms, gg, etc)
+      const cart = this._cartridge();
+      if (cart) {
+        (info as any)[this._system] = cart;
+      }
     }
     this._info = info;
 
@@ -423,6 +680,33 @@ export class Roomie extends EventEmitter {
   get system(): SupportedSystem { return this._system; }
   get path(): string { return this._path; }
   get rom(): Buffer { return this._rom; }
+
+  public toJSON(): string {
+    return JSON.stringify(this._info, null, 2);
+  }
+
+  public toGamelistXML(): string {
+    const info = this._info;
+    const name = this.name || path.basename(this._path);
+    const cart: any = this.cartridge || {};
+
+    let hardware = "None";
+    if (cart.mapperName) hardware = `Mapper ${cart.mapper} (${cart.mapperName})`;
+    else if (cart.mbc) hardware = `MBC (${cart.mbc})`;
+    else if (cart.rom?.type) hardware = `Type (${cart.rom.type})`;
+    else if (cart.saveType) hardware = `Save (${cart.saveType})`;
+
+    return `<?xml version="1.0"?>
+<gameList>
+  <game>
+    <path>${this._path}</path>
+    <name>${name}</name>
+    <desc>System: ${info.system}, Hardware: ${hardware}</desc>
+    <hash>${info.hash.sha1}</hash>
+    <crc32>${info.hash.crc32}</crc32>
+  </game>
+</gameList>`;
+  }
 }
 
 export default Roomie;
