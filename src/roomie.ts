@@ -2,7 +2,10 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import AdmZip from "adm-zip";
+import * as AdmZip from "adm-zip";
+// Handle ESM/CJS Interop for AdmZip
+const Zip = (AdmZip as any).default || AdmZip;
+
 import { regions } from "./tables/regions.js";
 import { specs } from "./tables/specs.js";
 import { hexEncode } from "./utils/stringHelper.js";
@@ -515,7 +518,7 @@ export class Roomie extends EventEmitter {
 
       // Check if it's a ZIP by extension or magic
       if (pathOrBuffer.toLowerCase().endsWith(".zip") || (fileBuffer.length > 4 && fileBuffer.readUInt32BE(0) === 0x504B0304)) {
-        const zip = new AdmZip(fileBuffer);
+        const zip = new Zip(fileBuffer);
         const entries = zip.getEntries();
         // Look for the first entry that doesn't look like junk
         const romEntry = entries.find((e: any) => !e.isDirectory && !e.entryName.match(/\.(txt|jpg|png|xml|db|url)$|^\./i));
@@ -533,7 +536,7 @@ export class Roomie extends EventEmitter {
       this._path = "in-memory";
       // Check if buffer is a ZIP
       if (pathOrBuffer.length > 4 && pathOrBuffer.readUInt32BE(0) === 0x504B0304) {
-        const zip = new AdmZip(pathOrBuffer);
+        const zip = new Zip(pathOrBuffer);
         const entries = zip.getEntries();
         const romEntry = entries.find((e: any) => !e.isDirectory && !e.entryName.match(/\.(txt|jpg|png|xml|db|url)$|^\./i));
         if (!romEntry) throw new Error("no_rom_in_zip");
