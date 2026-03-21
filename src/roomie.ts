@@ -2,9 +2,8 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import * as AdmZip from "adm-zip";
-// Handle ESM/CJS Interop for AdmZip
-const Zip = (AdmZip as any).default || AdmZip;
+import JSZip from "jszip";
+
 
 import { regions } from "./tables/regions.js";
 import { specs } from "./tables/specs.js";
@@ -104,11 +103,46 @@ export class Roomie extends EventEmitter {
       if (system === "gb" && b.length >= 0x0143) {
         return b.subarray(0x013F, 0x0143).toString("ascii");
       }
-      if (system === "n64" && b.length >= 0x2F) {
-        return b.subarray(0x20, 0x2F).toString("ascii").trim();
+      if (system === "n64" && b.length >= 0x3F) {
+        return this.getN64String(0x3B, 4).trim();
       }
     } catch { }
     return undefined;
+  }
+
+  private getN64String(offset: number, length: number): string {
+    const b = this._rom;
+    if (b.length < offset + length) return "";
+    const magic = b.readUInt32BE(0);
+
+    // native big endian (z64)
+    if (magic === 0x80371240) {
+      return b.subarray(offset, offset + length).toString("ascii");
+    }
+
+    // byte-swapped (v64)
+    if (magic === 0x37804012) {
+      const out = Buffer.alloc(length);
+      for (let i = 0; i < length; i += 2) {
+        out[i] = b[offset + i + 1];
+        out[i + 1] = b[offset + i];
+      }
+      return out.toString("ascii");
+    }
+
+    // little-endian (n64)
+    if (magic === 0x40123780) {
+      const out = Buffer.alloc(length);
+      for (let i = 0; i < length; i += 4) {
+        out[i] = b[offset + i + 3];
+        out[i + 1] = b[offset + i + 2];
+        out[i + 2] = b[offset + i + 1];
+        out[i + 3] = b[offset + i];
+      }
+      return out.toString("ascii");
+    }
+
+    return b.subarray(offset, offset + length).toString("ascii");
   }
 
   private computeRegion(system: SupportedSystem, gameCode?: string): string | undefined {
@@ -140,10 +174,9 @@ export class Roomie extends EventEmitter {
         }
         return undefined;
       case "n64":
-        // N64 region code at offset 0x3E in some ROMs (common practice)
         if (this._rom.length > 0x3E) {
-          const regionByte = this._rom[0x3E];
-          // Map region byte to region string (basic example)
+          const id = this.getN64String(0x3B, 4);
+          const regionByte = id.charCodeAt(3);
           const regionMap: Record<number, string> = {
             0x44: "USA",
             0x45: "Europe",
@@ -250,8 +283,8 @@ export class Roomie extends EventEmitter {
           }
           break;
         case "n64":
-          if (b.length >= 0x20) {
-            return b.subarray(0x20, 0x34).toString("ascii").replace(/\0/g, "").trim();
+          if (b.length >= 0x34) {
+            return this.getN64String(0x20, 20).replace(/\0/g, "").trim();
           }
           break;
         case "nes":
@@ -305,8 +338,8 @@ export class Roomie extends EventEmitter {
           }
           break;
         case "n64":
-          if (b.length >= 0x2F) {
-            return b.subarray(0x20, 0x2F).toString("ascii").trim();
+          if (b.length >= 0x3F) {
+            return this.getN64String(0x3B, 4).trim();
           }
           break;
       }
@@ -510,41 +543,34 @@ export class Roomie extends EventEmitter {
   }
 
   async load(pathOrBuffer: string | Buffer): Promise<void> {
-    let b: Buffer;
-
     if (typeof pathOrBuffer === "string") {
       this._path = pathOrBuffer;
-      const fileBuffer = await fs.readFile(pathOrBuffer);
+      let fileBuffer = await fs.readFile(pathOrBuffer);
 
       // Check if it's a ZIP by extension or magic
       if (pathOrBuffer.toLowerCase().endsWith(".zip") || (fileBuffer.length > 4 && fileBuffer.readUInt32BE(0) === 0x504B0304)) {
-        const zip = new Zip(fileBuffer);
-        const entries = zip.getEntries();
-        // Look for the first entry that doesn't look like junk
-        const romEntry = entries.find((e: any) => !e.isDirectory && !e.entryName.match(/\.(txt|jpg|png|xml|db|url)$|^\./i));
-
-        if (!romEntry) throw new Error("no_rom_in_zip");
-        b = zip.readFile(romEntry) as Buffer;
-      } else {
-        b = fileBuffer;
+        const zip = await JSZip.loadAsync(fileBuffer);
+        const romFilename = Object.keys(zip.files).find(f => !zip.files[f].dir && !f.match(/\.(txt|jpg|png|xml|db|url|json)$|^\./i));
+        if (!romFilename) throw new Error("no_rom_in_zip");
+        fileBuffer = Buffer.from(await zip.files[romFilename].async("nodebuffer"));
+        pathOrBuffer = romFilename;
       }
-
-      this._rom = b;
-      const detected = this.detectSystemFromPath(pathOrBuffer);
-      this._system = detected || "sfc"; // Fallback to be handled by buffer check if needed
-    } else {
+      this._rom = fileBuffer;
+      const detectedByPath = this.detectSystemFromPath(pathOrBuffer);
+      this._system = detectedByPath || "sfc";
+    } else if (Buffer.isBuffer(pathOrBuffer)) {
       this._path = "in-memory";
-      // Check if buffer is a ZIP
+      // Check if buffer is a ZIP (0x504B0304)
       if (pathOrBuffer.length > 4 && pathOrBuffer.readUInt32BE(0) === 0x504B0304) {
-        const zip = new Zip(pathOrBuffer);
-        const entries = zip.getEntries();
-        const romEntry = entries.find((e: any) => !e.isDirectory && !e.entryName.match(/\.(txt|jpg|png|xml|db|url)$|^\./i));
-        if (!romEntry) throw new Error("no_rom_in_zip");
-        b = zip.readFile(romEntry) as Buffer;
+        const zip = await JSZip.loadAsync(pathOrBuffer);
+        const romFilename = Object.keys(zip.files).find(f => !zip.files[f].dir && !f.match(/\.(txt|jpg|png|xml|db|url|json)$|^\./i));
+        if (!romFilename) throw new Error("no_rom_in_zip");
+        this._rom = Buffer.from(await zip.files[romFilename].async("nodebuffer"));
       } else {
-        b = pathOrBuffer;
+        this._rom = pathOrBuffer;
       }
-      this._rom = b;
+    } else {
+      throw new Error("Invalid path or buffer provided to Roomie.load()");
     }
 
     const romBuffer = this._rom;
@@ -562,31 +588,31 @@ export class Roomie extends EventEmitter {
     }
 
     // Check GBA: game code at 0xAC-0xB0 ASCII uppercase letters/digits
-    if (!detected && b.length >= 0xB0) {
-      const code = b.subarray(0xAC, 0xB0).toString("ascii");
+    if (!detected && romBuffer.length >= 0xB0) {
+      const code = romBuffer.subarray(0xAC, 0xB0).toString("ascii");
       if (/^[A-Z0-9]{4}$/.test(code)) {
         detected = "gba";
       }
     }
 
     // Check GB: game code at 0x0134-0x0143 ASCII valid characters
-    if (!detected && b.length >= 0x0143) {
-      const code = b.subarray(0x0134, 0x0143).toString("ascii");
+    if (!detected && romBuffer.length >= 0x0143) {
+      const code = romBuffer.subarray(0x0134, 0x0143).toString("ascii");
       if (/^[A-Z0-9]{4,9}$/.test(code)) {
         detected = "gb";
       }
     }
 
     // Check NES: starts with "NES\x1a"
-    if (!detected && b.length >= 4) {
-      if (b[0] === 0x4E && b[1] === 0x45 && b[2] === 0x53 && b[3] === 0x1A) {
+    if (!detected && romBuffer.length >= 4) {
+      if (romBuffer[0] === 0x4E && romBuffer[1] === 0x45 && romBuffer[2] === 0x53 && romBuffer[3] === 0x1A) {
         detected = "nes";
       }
     }
 
     // Check N64: ASCII text at 0x20-0x2E AND Magic Word at 0x00
-    if (!detected && b.length >= 0x2F) {
-      const magic = b.readUInt32BE(0);
+    if (!detected && romBuffer.length >= 0x2F) {
+      const magic = romBuffer.readUInt32BE(0);
       // Common N64 magic values (Big Endian, Byte Swapped, Little Endian)
       if (magic === 0x80371240 || magic === 0x37804012 || magic === 0x40123780) {
         detected = "n64";
@@ -594,14 +620,14 @@ export class Roomie extends EventEmitter {
     }
 
     // Check SFC: verify checksum or markup before falling back
-    if (!detected && b.length >= 0x8000) {
-      if (isHiRomBuffer(b)) {
+    if (!detected && romBuffer.length >= 0x8000) {
+      if (isHiRomBuffer(romBuffer)) {
         detected = "sfc";
       } else {
         // LoROM check
         const titleOff = 0x7FC0;
-        if (b.length > titleOff + 20) {
-          const title = b.subarray(titleOff, titleOff + 20).toString('ascii');
+        if (romBuffer.length > titleOff + 20) {
+          const title = romBuffer.subarray(titleOff, titleOff + 20).toString('ascii');
           if (/^[\x20-\x7E\s]+$/.test(title) && title.trim().length > 0) {
             detected = "sfc";
           }
@@ -610,8 +636,8 @@ export class Roomie extends EventEmitter {
     }
 
     // Check Genesis: "SEGA" at 0x100
-    if (!detected && b.length >= 0x104) {
-      const magic = b.subarray(0x100, 0x104).toString("ascii");
+    if (!detected && romBuffer.length >= 0x104) {
+      const magic = romBuffer.subarray(0x100, 0x104).toString("ascii");
       if (magic === "SEGA") {
         detected = "genesis";
       }
@@ -620,17 +646,17 @@ export class Roomie extends EventEmitter {
     // Check SMS/GG: "TMR SEGA" at 0x7FF0, 0x3FF0 or 0x1FF0
     if (!detected) {
       for (const off of [0x7FF0, 0x3FF0, 0x1FF0]) {
-        if (b.length >= off + 8 && b.subarray(off, off + 8).toString("ascii") === "TMR SEGA") {
-          detected = b.length >= 0x8000 ? "sms" : "gg"; // Heuristic
+        if (romBuffer.length >= off + 8 && romBuffer.subarray(off, off + 8).toString("ascii") === "TMR SEGA") {
+          detected = romBuffer.length >= 0x8000 ? "sms" : "gg"; // Heuristic
           break;
         }
       }
     }
 
     // Check WSC: check model byte near end
-    if (!detected && b.length >= 0x8000) {
-      const off = b.length - 10;
-      if (b[off + 1] === 0 || b[off + 1] === 1) { // 0=WS, 1=WSC
+    if (!detected && romBuffer.length >= 0x8000) {
+      const off = romBuffer.length - 10;
+      if (romBuffer[off + 1] === 0 || romBuffer[off + 1] === 1) { // 0=WS, 1=WSC
         // WSC check is a bit weak without developer ID check, but let's use it as heuristic
         // maybe only if extension also matches? 
       }
@@ -659,7 +685,7 @@ export class Roomie extends EventEmitter {
       info.n64 = {
         name: this._name(),
         country: this._region(),
-        version: this._rom.length > 0x3F ? this._rom[0x3F].toString() : undefined,
+        version: this._rom.length > 0x3F ? this.getN64String(0x3B, 5).slice(4) : undefined,
       };
     } else {
       // Generic assignment for new systems (nes, genesis, sms, gg, etc)
