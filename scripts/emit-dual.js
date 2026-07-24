@@ -3,24 +3,29 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const dist = join(__dirname, "..", "dist");
+const root = join(__dirname, "..");
+const dist = join(root, "dist");
+const cjs = join(dist, "cjs");
 
 async function run() {
+  // Mark CJS tree as CommonJS even though package root is "type": "module"
+  await fs.writeFile(join(cjs, "package.json"), JSON.stringify({ type: "commonjs" }, null, 2));
+
+  // ESM entry aliases expected by package.json exports
   const esmIndex = join(dist, "index.js");
-  try {
-    const code = await fs.readFile(esmIndex, "utf8");
-    await fs.writeFile(join(dist, "index.mjs"), code, "utf8");
-    // CJS proxy
-    const cjs = `
-const mod = require("./index.mjs");
-module.exports = mod.default || mod;
-module.exports.default = mod.default || mod;
-`;
-    await fs.writeFile(join(dist, "index.cjs"), cjs, "utf8");
-    console.log("Dual build emitted.");
-  } catch (e) {
-    console.error("emit-dual failed:", e);
-    process.exit(1);
-  }
+  await fs.copyFile(esmIndex, join(dist, "index.mjs"));
+
+  // CJS entry alias
+  await fs.writeFile(
+    join(dist, "index.cjs"),
+    `"use strict";\nmodule.exports = require("./cjs/index.js");\nmodule.exports.default = module.exports.default || module.exports;\n`
+  );
+
+  // Types stay at dist/index.d.ts from ESM build
+  console.log("Dual build emitted (ESM + CJS).");
 }
-run();
+
+run().catch((e) => {
+  console.error("emit-dual failed:", e);
+  process.exit(1);
+});

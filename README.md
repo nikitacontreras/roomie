@@ -6,25 +6,26 @@
 
 ## Introduction
 
-**roomie** is a powerful and lightweight library for extracting metadata from ROM files of classic gaming consoles. It supports multiple systems, handles **NES 2.0** headers, calculates **CRC32** and **SHA1** hashes, and can even read ROMs directly from **ZIP** archives.
+**roomie** is a lightweight library for extracting metadata from ROM files of classic gaming consoles. It supports multiple systems, handles **NES 2.0** headers, calculates **CRC32**, **MD5**, and **SHA1** hashes (including header-stripped hashes), and can read ROMs directly from **ZIP** archives.
 
-Designed for simplicity and accuracy, **roomie** identifies systems via header magic words or file extensions and provides detailed information about mappers, co-processors, regions, and save types.
+Designed for simplicity and accuracy, **roomie** identifies systems via header magic / scoring and optional file extensions, and provides details about mappers, co-processors, regions, and save types.
+
+> **Runtime:** Node.js ≥ 18 (uses `node:fs`, `node:crypto`, and `Buffer`).
 
 ---
 
 ## Features
 
-- **ZIP Support**: Load ROMs directly from `.zip` files.
-- **Hardware Detection**: Identifies NES Mappers, GB MBCs, SNES Co-processors, and GBA Save types.
-- **NES 2.0**: Full support for modern NES header specifications.
-- **Hashing**: Built-in SHA1 and CRC32 calculation.
-- **Exports**: Generate `JSON` or `Gamelist XML` (EmulationStation compatible) strings.
+- **ZIP Support**: Loads ROMs from `.zip` files and picks the best entry by detection score.
+- **Hardware Detection**: NES mappers, GB MBCs, SNES co-processors, GBA save types, NDS unit/capacity.
+- **NES 2.0**: Full support for modern NES header fields.
+- **Hashing**: SHA1, MD5, CRC32 — plus optional hashes with dump headers stripped (iNES, SMC).
+- **Exports**: JSON and EmulationStation-compatible `gamelist.xml` (XML-escaped).
+- **Typed API**: Per-system info blocks on `RomInfo`.
 
 ---
 
 ## Installation
-
-Install via npm:
 
 ```bash
 npm install roomie
@@ -34,30 +35,51 @@ npm install roomie
 
 ## Usage
 
-**roomie** supports both CommonJS (CJS) and ES Modules (ESM).
+Supports both **ESM** and **CommonJS**.
 
-### Basic Example (Async/Await)
+### Preferred: `Roomie.open`
 
 ```ts
 import Roomie from "roomie";
 
-const roomie = new Roomie();
+const roomie = await Roomie.open("./Super Mario World.sfc");
 
-// Load from a file path (supports .zip)
-await roomie.load("./Super Mario World.zip");
+console.log(roomie.system); // "sfc"
+console.log(roomie.name);
+console.log(roomie.hash);   // { sha1, md5, crc32, stripped? }
+console.log(roomie.info);   // full RomInfo
 
-console.log(roomie.info);
-/*
-{
-  system: 'sfc',
-  hash: { sha1: '...', crc32: 'b19ed489' },
-  sfc: { rom: { type: 'LoROM', size: 2048000 }, ram: 8000 },
-  ...
-}
-*/
-
-// Export to EmulationStation gamelist format
+// EmulationStation gamelist fragment
 console.log(roomie.toGamelistXML());
+```
+
+### Options
+
+```ts
+// Skip hashing for speed
+await Roomie.open(buf, { hash: false });
+
+// Batch
+const roms = await Roomie.openMany(["./a.nes", "./b.gba"]);
+
+// Batch without failing the whole list
+const settled = await Roomie.openManySettled(["./a.nes", "./missing.nes"]);
+```
+
+### Instance `load`
+
+```ts
+const roomie = new Roomie();
+await roomie.load("./game.zip");
+```
+
+### From a Buffer
+
+```ts
+import { readFile } from "node:fs/promises";
+
+const buf = await readFile("./game.nes");
+const roomie = await Roomie.open(buf);
 ```
 
 ---
@@ -66,41 +88,84 @@ console.log(roomie.toGamelistXML());
 
 | Console | System Key | Description |
 |---------|------------|-------------|
-| **NES / Famicom** | `nes` | iNES & **NES 2.0** support. Detects Mappers (MMC1, MMC3, etc). |
-| **Super Nintendo** | `sfc` | Detects LoROM/HiROM, Co-processors (SuperFX, SA-1, DSP). |
-| **Nintendo 64** | `n64` | Header parsing, region detection, and byte-swapping support. |
-| **Game Boy / Color** | `gb` | Detects MBC types, RAM size, and GBC/SGB features. |
-| **Game Boy Advance** | `gba` | Extract Game ID and identifies Save Type (SRAM/Flash/EEPROM). |
-| **Nintendo DS** | `nds` | Game code, region, unit code (DSi), and device capacity. |
-| **Sega Genesis** | `genesis` | Reads Domestic/Overseas names, serials, and regions. |
-| **Master System / GG** | `sms` / `gg` | Header detection (TMR SEGA), product code, and region. |
-| **WonderSwan / Color** | `ws` / `wsc` | End-of-ROM header parsing for game ID and model. |
-| **PC Engine** | `pce` | Basic identification for TurboGrafx-16 systems. |
+| **NES / Famicom** | `nes` | iNES & **NES 2.0**. Mapper, PRG/CHR, timing. |
+| **Super Nintendo** | `sfc` | LoROM/HiROM, co-processors, correct ROM/RAM sizes, SMC strip. |
+| **Nintendo 64** | `n64` | Header parse with **z64 / v64 / n64** endian support. |
+| **Game Boy** | `gb` | MBC, ROM/RAM sizes, region. |
+| **Game Boy Color** | `gbc` | Same as GB with CGB flag detection. |
+| **Game Boy Advance** | `gba` | Game ID, region, save type (SRAM/Flash/EEPROM). |
+| **Nintendo DS** | `nds` | Game code, region, unit code (DSi), device capacity. |
+| **Sega Genesis** | `genesis` | Domestic/overseas names, serial, regions. |
+| **Master System / GG** | `sms` / `gg` | `TMR SEGA` header, product code, region. |
+| **WonderSwan / Color** | `ws` / `wsc` | End-of-ROM header, model, checksum score. |
+| **PC Engine** | `pce` | Extension / size heuristics (no standard header). |
 
 ---
 
 ## API Reference
 
-### Methods
+### Static methods
 
-- **`await load(pathOrBuffer: string | Buffer)`**: Loads a ROM. If it's a ZIP, it extracts the first ROM entry.
-- **`toJSON(): string`**: Returns the `RomInfo` object as a formatted JSON string.
-- **`toGamelistXML(): string`**: Returns an XML string compatible with EmulationStation's `gamelist.xml`.
+| Method | Description |
+|--------|-------------|
+| `Roomie.open(path \| Buffer, options?)` | Load and return a ready instance. |
+| `Roomie.openMany(paths, options?)` | Load many paths (rejects on first error). |
+| `Roomie.openManySettled(paths, options?)` | `Promise.allSettled` style batch. |
+
+### Instance methods
+
+| Method | Description |
+|--------|-------------|
+| `await load(path \| Buffer, options?)` | Load into this instance. |
+| `toJSON()` | Pretty-printed `RomInfo` JSON. |
+| `toGamelistXML()` | EmulationStation-compatible XML (escaped). |
 
 ### Properties
 
-- **`info: RomInfo`**: Comprehensive metadata object.
-- **`system: string`**: The detected system key (e.g., `"sfc"`, `"nes"`).
-- **`hash: { sha1, crc32 }`**: Calculated hashes of the ROM (excluding ZIP overhead).
-- **`cartridge`**: System-specific details (Mappers, MBC, Save Types).
+| Property | Description |
+|----------|-------------|
+| `info` | Full `RomInfo` (typed per-system blocks: `info.nes`, `info.sfc`, …). |
+| `system` | Detected system key. |
+| `hash` | `{ sha1, md5, crc32, stripped? }`. |
+| `path` | Source path or `"in-memory"`. |
+| `rom` | Raw ROM `Buffer`. |
+| `name` / `region` / `gamecode` / `gameid` / `cartridge` | Convenience mirrors of `info`. |
+| `loaded` | Whether a ROM has been loaded. |
+
+### `LoadOptions`
+
+```ts
+{
+  hash?: boolean;             // default true
+  preferExtension?: boolean;  // default true — extension boosts detection ties
+}
+```
+
+### Errors
+
+Throws `RoomieError` with a `code`:
+
+| Code | Meaning |
+|------|---------|
+| `UNKNOWN_BYTES` | No known system header / detection failed. |
+| `NO_ROM_IN_ZIP` | ZIP has no usable ROM entry. |
+| `INVALID_INPUT` | Not a path string or Buffer. |
+| `NOT_LOADED` | Accessed `info` / `system` before load. |
+
+Legacy string-style messages still appear in `error.message` for readability.
 
 ---
 
-## Error Handling
+## Development
 
-- `unknown_file`: System extension not supported.
-- `unknown_bytes`: Bytes don't match any known system header.
-- `no_rom_in_zip`: ZIP file loaded but no valid ROM found inside.
+```bash
+npm install
+npm test
+npm run build
+npm run typecheck
+```
+
+Tests use synthetic header fixtures only (no copyrighted ROMs).
 
 ---
 

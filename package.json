@@ -1,7 +1,7 @@
 {
   "name": "roomie",
-  "version": "1.1.3",
-  "description": "ROM metadata helper",
+  "version": "1.2.0",
+  "description": "ROM metadata helper for classic consoles (NES, SNES, N64, GB/GBA, NDS, Genesis, SMS, WonderSwan, PCE)",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.cjs",
@@ -9,8 +9,9 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
       "default": "./dist/index.mjs"
     }
   },
@@ -21,15 +22,39 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc && node scripts/emit-dual.js",
+    "build": "npm run clean && tsc && tsc -p tsconfig.cjs.json && node scripts/emit-dual.js",
     "clean": "rimraf dist",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run build && npm test",
     "typecheck": "tsc --noEmit",
-    "prepare": "npm run clean && npm run build"
+    "test": "tsx --test test/**/*.test.ts",
+    "prepare": "npm run build"
   },
+  "keywords": [
+    "rom",
+    "metadata",
+    "nes",
+    "snes",
+    "n64",
+    "gameboy",
+    "gba",
+    "nds",
+    "genesis",
+    "emulation",
+    "crc32",
+    "no-intro"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nikitacontreras/roomie.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nikitacontreras/roomie/issues"
+  },
+  "homepage": "https://github.com/nikitacontreras/roomie#readme",
   "devDependencies": {
     "@types/node": "^20.19.37",
     "rimraf": "^5.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   },
   "dependencies": {
